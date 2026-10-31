@@ -6,17 +6,18 @@
 // ─── Category Definitions ──────────────────────────────────────────────────────
 
 const EXPENSE_CATS = [
-    { id: 'emi',           icon: '🏦', name: 'EMI'           },
-    { id: 'bills',         icon: '💡', name: 'Bills'         },
-    { id: 'groceries',     icon: '🛒', name: 'Groceries'     },
-    { id: 'medical',       icon: '💊', name: 'Medical'       },
-    { id: 'fuel',          icon: '⛽', name: 'Fuel'          },
-    { id: 'food',          icon: '🍽️', name: 'Food'          },
-    { id: 'entertainment', icon: '🎬', name: 'Entertainment' },
-    { id: 'travel',        icon: '✈️', name: 'Travel'        },
-    { id: 'shopping',      icon: '🛍️', name: 'Shopping'      },
-    { id: 'subscriptions', icon: '📺', name: 'Subscriptions' },
-    { id: 'misc',          icon: '📦', name: 'Misc'          },
+    { id: 'emi',           icon: '🏦', name: 'EMI'          },
+    { id: 'bills',         icon: '💡', name: 'Bills'        },
+    { id: 'groceries',     icon: '🛒', name: 'Groceries'    },
+    { id: 'medical',       icon: '💊', name: 'Medical'      },
+    { id: 'fuel',          icon: '⛽', name: 'Fuel'         },
+    { id: 'food',          icon: '🍽️', name: 'Outside Food' },
+    { id: 'snacks',        icon: '☕', name: 'Snacks'       },
+    { id: 'entertainment', icon: '🎬', name: 'Entertainment'},
+    { id: 'travel',        icon: '✈️', name: 'Travel'       },
+    { id: 'shopping',      icon: '🛍️', name: 'Shopping'     },
+    { id: 'subscriptions', icon: '📺', name: 'Subscriptions'},
+    { id: 'misc',          icon: '📦', name: 'Misc'         },
 ];
 
 const INCOME_CATS = [
