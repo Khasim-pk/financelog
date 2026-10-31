@@ -84,12 +84,25 @@ function monthLabel(d) {
     return d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 }
 
+let toastTimer = null;
+
 /** Show a brief toast message at the bottom */
-function toast(msg, ms = 2500) {
+function toast(msg, ms = 2200) {
     const el = document.getElementById('toast');
+    if (!el) return;
+    
+    // Telegram haptic vibration if available
+    if (window.Telegram?.WebApp?.HapticFeedback) {
+        window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+    }
+
     el.textContent = msg;
     el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), ms);
+    
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+        el.classList.remove('show');
+    }, ms);
 }
 
 // ─── View Navigation ───────────────────────────────────────────────────────────
