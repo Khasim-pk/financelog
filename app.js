@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   FinanceLog — app.js
+   FinanceLog — app.js  v1.2
    Main application logic for the Telegram Mini App
 ════════════════════════════════════════════════════════════ */
 
@@ -35,9 +35,11 @@ let db;                          // Supabase client
 let currentType    = 'expense';  // 'expense' | 'income'
 let selectedCat    = null;       // selected category id
 let selectedPay    = 'UPI';      // 'UPI' | 'Cash' | 'Credit Card'
-let currentFilter  = 'month';    // 'week' | 'month' | 'pick'
+let currentFilter  = 'week';     // 'week' | 'month' | 'pick'
 let summaryMonth   = new Date(); // month shown in Summary
 let monthlyBudget  = 0;          // stored monthly budget amount
+let weeklyBudget   = 0;          // stored weekly budget amount
+let selectedEMIIcon = '🏠';      // currently selected icon in Add EMI form
 
 // ─── Initialise ────────────────────────────────────────────────────────────────
 
@@ -60,6 +62,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load saved budget from DB
     loadBudget();
+
+    // Run EMI auto-deduction on startup
+    runEMIAutoDeduct();
 });
 
 // ─── Utility Helpers ───────────────────────────────────────────────────────────
@@ -76,7 +81,7 @@ function inr(amount) {
 
 /** Format a date string (YYYY-MM-DD) as "31 Oct 2026" */
 function fmtDate(str) {
-    const d = new Date(str + 'T00:00:00'); // avoid timezone shift
+    const d = new Date(str + 'T00:00:00');
     return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
@@ -85,21 +90,25 @@ function monthLabel(d) {
     return d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 }
 
+/** Return "16 Oct" style short label */
+function shortDateLabel(d) {
+    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+}
+
 let toastTimer = null;
 
 /** Show a brief toast message at the bottom */
 function toast(msg, ms = 2200) {
     const el = document.getElementById('toast');
     if (!el) return;
-    
-    // Telegram haptic vibration if available
+
     if (window.Telegram?.WebApp?.HapticFeedback) {
         window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
     }
 
     el.textContent = msg;
     el.classList.add('show');
-    
+
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
         el.classList.remove('show');
@@ -109,22 +118,19 @@ function toast(msg, ms = 2200) {
 // ─── View Navigation ───────────────────────────────────────────────────────────
 
 function showView(name) {
-    // Switch view panels
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     document.getElementById(`${name}-view`).classList.add('active');
 
-    // Switch nav buttons
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     document.getElementById(`nav-${name}`).classList.add('active');
 
-    // Trigger data load for the opened view
     if (name === 'history') loadHistory();
     if (name === 'summary') loadSummary();
+    if (name === 'track')   loadTrack();
 }
 
 // ─── Home — Quick Add ──────────────────────────────────────────────────────────
 
-/** Toggle between Expense and Income modes */
 function setType(type) {
     currentType = type;
     selectedCat = null;
@@ -132,14 +138,12 @@ function setType(type) {
     document.getElementById('btn-expense').classList.toggle('active', type === 'expense');
     document.getElementById('btn-income').classList.toggle('active', type === 'income');
 
-    // Payment mode is only relevant for expenses
     document.getElementById('payment-section').style.display =
         type === 'expense' ? 'block' : 'none';
 
     renderCatGrid();
 }
 
-/** Render category grid based on current type */
 function renderCatGrid() {
     const cats = currentType === 'expense' ? EXPENSE_CATS : INCOME_CATS;
     const grid = document.getElementById('category-grid');
@@ -152,29 +156,25 @@ function renderCatGrid() {
     `).join('');
 }
 
-/** Select a category */
 function pickCat(id) {
     selectedCat = id;
     renderCatGrid();
 }
 
-/** Select a payment mode pill */
 function setPayment(btn) {
     selectedPay = btn.dataset.pay;
     document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
 }
 
-/** Save a new transaction to Supabase */
 async function saveTransaction() {
     const amount = parseFloat(document.getElementById('amount-input').value);
     const date   = document.getElementById('date-input').value;
     const notes  = document.getElementById('notes-input').value.trim();
 
-    // Validation
-    if (!amount || amount <= 0)   { toast('⚠️ Please enter a valid amount'); return; }
-    if (!selectedCat)             { toast('⚠️ Please select a category');    return; }
-    if (!date)                    { toast('⚠️ Please pick a date');          return; }
+    if (!amount || amount <= 0) { toast('⚠️ Please enter a valid amount'); return; }
+    if (!selectedCat)           { toast('⚠️ Please select a category');    return; }
+    if (!date)                  { toast('⚠️ Please pick a date');          return; }
 
     const record = {
         type:         currentType,
@@ -185,7 +185,6 @@ async function saveTransaction() {
         date:         date,
     };
 
-    // Disable save button while saving
     const btn = document.getElementById('save-btn');
     btn.textContent = 'Saving…';
     btn.disabled = true;
@@ -201,7 +200,6 @@ async function saveTransaction() {
         return;
     }
 
-    // Reset form on success
     document.getElementById('amount-input').value = '';
     document.getElementById('notes-input').value  = '';
     document.getElementById('date-input').value   = todayStr();
@@ -211,51 +209,59 @@ async function saveTransaction() {
     toast('✅ Saved successfully!');
 }
 
-// ─── Budget Settings ───────────────────────────────────────────────────────────
+// ─── Budget / Limits Settings ──────────────────────────────────────────────────
 
-/** Load saved monthly budget from Supabase */
 async function loadBudget() {
     const { data } = await db
         .from('budget_settings')
-        .select('monthly_budget')
+        .select('monthly_budget, weekly_budget')
         .eq('id', 1)
         .single();
 
-    if (data) monthlyBudget = parseFloat(data.monthly_budget) || 0;
+    if (data) {
+        monthlyBudget = parseFloat(data.monthly_budget) || 0;
+        weeklyBudget  = parseFloat(data.weekly_budget)  || 0;
+    }
 }
 
-/** Open the budget modal */
 function openBudgetSettings() {
-    document.getElementById('budget-input').value = monthlyBudget > 0 ? monthlyBudget : '';
+    document.getElementById('budget-input').value        = monthlyBudget > 0 ? monthlyBudget : '';
+    document.getElementById('weekly-budget-input').value = weeklyBudget  > 0 ? weeklyBudget  : '';
     document.getElementById('budget-modal').style.display = 'flex';
 }
 
-/** Close the budget modal */
 function closeBudgetSettings() {
     document.getElementById('budget-modal').style.display = 'none';
 }
 
-/** Save the monthly budget to Supabase */
 async function saveBudget() {
-    const val = parseFloat(document.getElementById('budget-input').value);
-    if (!val || val <= 0) { toast('⚠️ Enter a valid budget amount'); return; }
+    const monthly = parseFloat(document.getElementById('budget-input').value);
+    const weekly  = parseFloat(document.getElementById('weekly-budget-input').value);
+
+    if (!monthly || monthly <= 0) { toast('⚠️ Enter a valid monthly limit'); return; }
+    if (!weekly  || weekly  <= 0) { toast('⚠️ Enter a valid weekly limit');  return; }
 
     const { error } = await db.from('budget_settings').upsert({
         id:             1,
-        monthly_budget: val,
+        monthly_budget: monthly,
+        weekly_budget:  weekly,
         updated_at:     new Date().toISOString(),
     });
 
-    if (error) { toast('❌ Failed to save budget'); return; }
+    if (error) { toast('❌ Failed to save limits'); return; }
 
-    monthlyBudget = val;
+    monthlyBudget = monthly;
+    weeklyBudget  = weekly;
     closeBudgetSettings();
-    toast('✅ Budget updated!');
+    toast('✅ Limits updated!');
+
+    // Refresh Track view if it's active
+    const trackView = document.getElementById('track-view');
+    if (trackView && trackView.classList.contains('active')) loadTrack();
 }
 
 // ─── History View ──────────────────────────────────────────────────────────────
 
-/** Switch the date filter tab */
 function setFilter(btn) {
     currentFilter = btn.dataset.filter;
 
@@ -268,18 +274,15 @@ function setFilter(btn) {
     if (currentFilter !== 'pick') loadHistory();
 }
 
-/** Load and render transaction history */
 async function loadHistory() {
     const list = document.getElementById('history-list');
     list.innerHTML = '<p class="loading-state">Loading…</p>';
 
-    // Calculate date range
     const now = new Date();
     let from, to;
 
     if (currentFilter === 'week') {
-        // Monday of current week → today
-        const day  = now.getDay(); // 0=Sun
+        const day  = now.getDay();
         const diff = day === 0 ? -6 : 1 - day;
         const mon  = new Date(now);
         mon.setDate(now.getDate() + diff);
@@ -293,7 +296,6 @@ async function loadHistory() {
         to   = todayStr();
 
     } else {
-        // User-picked month
         const val = document.getElementById('month-picker').value;
         if (!val) {
             list.innerHTML = '<p class="empty-state">Select a month above</p>';
@@ -344,7 +346,6 @@ async function loadHistory() {
     }).join('');
 }
 
-/** Delete a single transaction */
 async function deleteTxn(id) {
     if (!confirm('Delete this transaction?')) return;
 
@@ -353,7 +354,6 @@ async function deleteTxn(id) {
 
     document.getElementById(`txn-${id}`)?.remove();
 
-    // Show empty state if list is now empty
     const list = document.getElementById('history-list');
     if (list && !list.querySelector('.txn-item')) {
         list.innerHTML = '<p class="empty-state">No transactions found for this period.</p>';
@@ -363,15 +363,12 @@ async function deleteTxn(id) {
 
 // ─── Summary View ──────────────────────────────────────────────────────────────
 
-/** Move the summary one month forward or back */
 function shiftMonth(dir) {
     summaryMonth.setMonth(summaryMonth.getMonth() + dir);
     loadSummary();
 }
 
-/** Load and render the summary for summaryMonth */
 async function loadSummary() {
-    // Update month label
     document.getElementById('summary-month-label').textContent = monthLabel(summaryMonth);
 
     const y    = summaryMonth.getFullYear();
@@ -394,18 +391,12 @@ async function loadSummary() {
     const totalExp = expenses.reduce((s, t) => s + parseFloat(t.amount), 0);
     const totalInc = incomes.reduce((s, t)  => s + parseFloat(t.amount), 0);
 
-    // ── Cards
     document.getElementById('total-income').textContent = inr(totalInc);
     document.getElementById('total-spent').textContent  = inr(totalExp);
 
-    // ── Budget bar
     renderBudgetBar(totalExp);
-
-    // ── Category breakdown
     renderCategoryBreakdown(expenses, totalExp);
-
-    // ── Payment mode breakdown
-    renderPaymentBreakdown(expenses);
+    renderPaymentBreakdown(expenses, y, summaryMonth.getMonth());
 }
 
 function renderBudgetBar(totalExp) {
@@ -413,8 +404,8 @@ function renderBudgetBar(totalExp) {
     if (monthlyBudget <= 0) { box.style.display = 'none'; return; }
     box.style.display = 'block';
 
-    const pct   = Math.min((totalExp / monthlyBudget) * 100, 100);
-    const fill  = document.getElementById('budget-fill');
+    const pct  = Math.min((totalExp / monthlyBudget) * 100, 100);
+    const fill = document.getElementById('budget-fill');
     fill.style.width = pct + '%';
     fill.className   = 'budget-fill' + (pct >= 90 ? ' danger' : pct >= 70 ? ' warn' : '');
 
@@ -428,7 +419,6 @@ function renderBudgetBar(totalExp) {
 function renderCategoryBreakdown(expenses, totalExp) {
     const el = document.getElementById('category-breakdown');
 
-    // Sum by category
     const catMap = {};
     expenses.forEach(t => {
         catMap[t.category] = (catMap[t.category] || 0) + parseFloat(t.amount);
@@ -461,28 +451,414 @@ function renderCategoryBreakdown(expenses, totalExp) {
     }).join('');
 }
 
-function renderPaymentBreakdown(expenses) {
+// ─── Payment Mode Breakdown (with CC Billing Cycle) ───────────────────────────
+
+async function renderPaymentBreakdown(expenses, calYear, calMonthIdx) {
     const el = document.getElementById('payment-breakdown');
 
+    // Separate CC and non-CC expenses from the calendar month
+    const nonCC = expenses.filter(t => t.payment_mode !== 'Credit Card');
     const payMap = {};
-    expenses.forEach(t => {
+    nonCC.forEach(t => {
         if (t.payment_mode) {
             payMap[t.payment_mode] = (payMap[t.payment_mode] || 0) + parseFloat(t.amount);
         }
     });
 
-    const modes = Object.entries(payMap).sort((a, b) => b[1] - a[1]);
+    const icons = { 'UPI': '📱', 'Cash': '💵' };
+    const rows  = Object.entries(payMap)
+        .sort((a, b) => b[1] - a[1])
+        .map(([mode, amt]) => `
+        <div class="pay-item">
+            <div class="pay-name">${icons[mode] ?? ''} ${mode}</div>
+            <div class="pay-amount">${inr(amt)}</div>
+        </div>`);
 
-    if (modes.length === 0) {
+    // ── Credit Card billing cycle block ──────────────────────────────────────
+    // Determine which billing cycle(s) end(s) in this calendar month:
+    // Bill A: ends on 15th of calMonth  → starts on 16th of prev month
+    // After the 16th, a 2nd cycle (Bill B) is accumulating:
+    // Bill B: starts on 16th of calMonth → ends on 15th of next month
+
+    const isCurrentMonth = (calYear === new Date().getFullYear() &&
+                            calMonthIdx === new Date().getMonth());
+    const todayDay = new Date().getDate();
+
+    // Bill A: (prev month 16th) → (this month 15th)
+    const billAFrom = new Date(calYear, calMonthIdx - 1, 16);
+    const billATo   = new Date(calYear, calMonthIdx,     15);
+
+    const billAFromStr = billAFrom.toISOString().split('T')[0];
+    const billAToStr   = billATo.toISOString().split('T')[0];
+
+    // Fetch Bill A CC transactions
+    const { data: ccDataA } = await db
+        .from('transactions')
+        .select('amount')
+        .eq('payment_mode', 'Credit Card')
+        .gte('date', billAFromStr)
+        .lte('date', billAToStr);
+
+    const billATotal = (ccDataA || []).reduce((s, t) => s + parseFloat(t.amount), 0);
+
+    const billALabel = `${shortDateLabel(billAFrom)} – ${shortDateLabel(billATo)}`;
+
+    let ccHTML = '';
+
+    // Show Bill B only when viewing current month AND today ≥ 16th
+    if (isCurrentMonth && todayDay >= 16) {
+        const billBFrom = new Date(calYear, calMonthIdx,     16);
+        const billBTo   = new Date(calYear, calMonthIdx + 1, 15);
+
+        const billBFromStr = billBFrom.toISOString().split('T')[0];
+        const billBToStr   = billBTo.toISOString().split('T')[0];
+
+        const { data: ccDataB } = await db
+            .from('transactions')
+            .select('amount')
+            .eq('payment_mode', 'Credit Card')
+            .gte('date', billBFromStr)
+            .lte('date', billBToStr);
+
+        const billBTotal = (ccDataB || []).reduce((s, t) => s + parseFloat(t.amount), 0);
+        const billBLabel = `${shortDateLabel(billBFrom)} – ${shortDateLabel(billBTo)}`;
+
+        ccHTML = `
+        <div class="pay-item cc-bill-item">
+            <div class="cc-bill-section">
+                <div class="cc-bill-header">💳 Credit Card</div>
+                <div class="cc-bill-row">
+                    <span class="cc-bill-label">Bill: ${billALabel}</span>
+                    <span class="cc-bill-amount">${inr(billATotal)}</span>
+                </div>
+                <div class="cc-bill-divider"></div>
+                <div class="cc-bill-row next">
+                    <span class="cc-bill-label">Next: ${billBLabel}</span>
+                    <span class="cc-bill-amount">${inr(billBTotal)}</span>
+                </div>
+            </div>
+        </div>`;
+    } else if (billATotal > 0) {
+        ccHTML = `
+        <div class="pay-item cc-bill-item">
+            <div class="cc-bill-section">
+                <div class="cc-bill-header">💳 Credit Card</div>
+                <div class="cc-bill-row">
+                    <span class="cc-bill-label">Bill: ${billALabel}</span>
+                    <span class="cc-bill-amount">${inr(billATotal)}</span>
+                </div>
+            </div>
+        </div>`;
+    }
+
+    if (rows.length === 0 && !ccHTML) {
         el.innerHTML = '<p class="empty-state" style="padding:16px 0 24px">No data</p>';
         return;
     }
 
-    const icons = { 'UPI': '📱', 'Cash': '💵', 'Credit Card': '💳' };
-    el.innerHTML = modes.map(([mode, amt]) => `
-        <div class="pay-item">
-            <div class="pay-name">${icons[mode] ?? ''} ${mode}</div>
-            <div class="pay-amount">${inr(amt)}</div>
+    el.innerHTML = rows.join('') + ccHTML;
+}
+
+// ─── Track View — Limits & EMI ─────────────────────────────────────────────────
+
+async function loadTrack() {
+    renderLimits();
+    loadEMIList();
+}
+
+async function renderLimits() {
+    const now  = new Date();
+    const y    = now.getFullYear();
+    const m    = String(now.getMonth() + 1).padStart(2, '0');
+    const last = new Date(y, now.getMonth() + 1, 0).getDate();
+
+    // ── Monthly spend (1st → today) ──
+    const { data: monthData } = await db
+        .from('transactions')
+        .select('amount')
+        .eq('type', 'expense')
+        .gte('date', `${y}-${m}-01`)
+        .lte('date', todayStr());
+
+    const monthSpent = (monthData || []).reduce((s, t) => s + parseFloat(t.amount), 0);
+
+    // ── Weekly spend (Mon → today) ──
+    const day  = now.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    const mon  = new Date(now);
+    mon.setDate(now.getDate() + diff);
+    const monStr = mon.toISOString().split('T')[0];
+
+    const { data: weekData } = await db
+        .from('transactions')
+        .select('amount')
+        .eq('type', 'expense')
+        .gte('date', monStr)
+        .lte('date', todayStr());
+
+    const weekSpent = (weekData || []).reduce((s, t) => s + parseFloat(t.amount), 0);
+
+    // ── Render Monthly ──
+    renderLimitBar({
+        spent:     monthSpent,
+        limit:     monthlyBudget,
+        fillId:    'monthly-limit-fill',
+        ratioId:   'monthly-limit-ratio',
+        remainId:  'monthly-limit-remaining',
+        label:     `${now.toLocaleDateString('en-IN', { month: 'long' })}`,
+    });
+
+    // ── Render Weekly ──
+    const weekLabel = `${shortDateLabel(mon)} – ${shortDateLabel(now)}`;
+    document.getElementById('weekly-limit-label').textContent = `This Week  (${weekLabel})`;
+
+    renderLimitBar({
+        spent:     weekSpent,
+        limit:     weeklyBudget,
+        fillId:    'weekly-limit-fill',
+        ratioId:   'weekly-limit-ratio',
+        remainId:  'weekly-limit-remaining',
+    });
+}
+
+function renderLimitBar({ spent, limit, fillId, ratioId, remainId }) {
+    const ratioEl  = document.getElementById(ratioId);
+    const fillEl   = document.getElementById(fillId);
+    const remainEl = document.getElementById(remainId);
+
+    if (limit <= 0) {
+        ratioEl.textContent  = '— / —';
+        fillEl.style.width   = '0%';
+        fillEl.className     = 'budget-fill';
+        remainEl.textContent = 'No limit set — tap ⚙️ to set one';
+        remainEl.className   = 'limit-remaining';
+        return;
+    }
+
+    const pct       = Math.min((spent / limit) * 100, 100);
+    const remaining = limit - spent;
+
+    ratioEl.textContent  = `${inr(spent)} / ${inr(limit)}`;
+    fillEl.style.width   = pct + '%';
+    fillEl.className     = 'budget-fill' + (pct >= 90 ? ' danger' : pct >= 70 ? ' warn' : '');
+
+    if (remaining >= 0) {
+        remainEl.textContent = `${inr(remaining)} remaining`;
+        remainEl.className   = 'limit-remaining' + (pct >= 90 ? ' danger' : '');
+    } else {
+        remainEl.textContent = `${inr(Math.abs(remaining))} over limit!`;
+        remainEl.className   = 'limit-remaining danger';
+    }
+}
+
+// ─── EMI Tracker ───────────────────────────────────────────────────────────────
+
+async function loadEMIList() {
+    const el = document.getElementById('emi-list');
+    el.innerHTML = '<p class="loading-state">Loading…</p>';
+
+    const { data, error } = await db
+        .from('emi_tracker')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+    if (error) {
+        el.innerHTML = '<p class="empty-state">Failed to load loans.</p>';
+        return;
+    }
+    if (!data || data.length === 0) {
+        el.innerHTML = '<p class="empty-state" style="padding:24px 0">No EMIs added yet. Tap ➕ to add one.</p>';
+        return;
+    }
+
+    el.innerHTML = data.map(loan => renderEMICard(loan)).join('');
+}
+
+function renderEMICard(loan) {
+    const totalPaid      = parseFloat(loan.total_paid);
+    const totalAmt       = parseFloat(loan.total_amount);
+    const paidPct        = totalAmt > 0 ? Math.min((totalPaid / totalAmt) * 100, 100).toFixed(1) : '0.0';
+    const monthsLeft     = loan.remaining_tenure;
+    const totalTenure    = loan.total_tenure;
+    const monthsPaid     = totalTenure - monthsLeft;
+    const isComplete     = monthsLeft <= 0 || !loan.is_active;
+
+    const tenureBar = `
+        <div class="mini-track" style="margin-top:5px">
+            <div class="mini-fill emi-fill" style="width:${paidPct}%"></div>
+        </div>`;
+
+    return `
+    <div class="emi-card ${isComplete ? 'completed' : ''}" id="emi-card-${loan.id}">
+        <div class="emi-header">
+            <div class="emi-icon">${loan.loan_icon}</div>
+            <div class="emi-info">
+                <div class="emi-name">${loan.loan_name}</div>
+                <div class="emi-per-month">${inr(loan.emi_amount)} / month</div>
+            </div>
+            ${isComplete
+                ? '<span class="emi-badge">✅ Paid Off</span>'
+                : `<button class="del-btn" onclick="deleteEMI('${loan.id}')" title="Remove loan">🗑️</button>`
+            }
         </div>
-    `).join('');
+        <div class="emi-progress-section">
+            <div class="emi-progress-header">
+                <span>Paid: ${inr(totalPaid)}</span>
+                <span>Total: ${inr(totalAmt)}</span>
+            </div>
+            <div class="budget-track">
+                <div class="budget-fill emi-fill" style="width:${paidPct}%"></div>
+            </div>
+            <div class="emi-tenure">
+                <span>${monthsPaid} of ${totalTenure} months paid</span>
+                <span>${isComplete ? 'Complete!' : `${monthsLeft} months left`}</span>
+            </div>
+        </div>
+    </div>`;
+}
+
+// ─── Add EMI Modal ─────────────────────────────────────────────────────────────
+
+function openAddEMI() {
+    // Reset form
+    document.getElementById('emi-name').value        = '';
+    document.getElementById('emi-total').value       = '';
+    document.getElementById('emi-monthly').value     = '';
+    document.getElementById('emi-tenure').value      = '';
+    document.getElementById('emi-paid-months').value = '0';
+    selectedEMIIcon = '🏠';
+    document.querySelectorAll('.icon-opt').forEach(b => {
+        b.classList.toggle('selected', b.dataset.icon === '🏠');
+    });
+    document.getElementById('emi-modal').style.display = 'flex';
+}
+
+function closeAddEMI() {
+    document.getElementById('emi-modal').style.display = 'none';
+}
+
+function pickEMIIcon(btn) {
+    selectedEMIIcon = btn.dataset.icon;
+    document.querySelectorAll('.icon-opt').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+}
+
+async function saveEMI() {
+    const name       = document.getElementById('emi-name').value.trim();
+    const totalAmt   = parseFloat(document.getElementById('emi-total').value);
+    const emiAmt     = parseFloat(document.getElementById('emi-monthly').value);
+    const tenure     = parseInt(document.getElementById('emi-tenure').value,  10);
+    const paidMonths = parseInt(document.getElementById('emi-paid-months').value, 10) || 0;
+
+    if (!name)                        { toast('⚠️ Enter a loan name');           return; }
+    if (!totalAmt || totalAmt <= 0)   { toast('⚠️ Enter total loan amount');     return; }
+    if (!emiAmt   || emiAmt   <= 0)   { toast('⚠️ Enter monthly EMI amount');    return; }
+    if (!tenure   || tenure   <= 0)   { toast('⚠️ Enter total tenure in months');return; }
+    if (paidMonths < 0 || paidMonths >= tenure) {
+        toast('⚠️ Paid months must be between 0 and tenure-1'); return;
+    }
+
+    const remaining  = tenure - paidMonths;
+    const totalPaid  = emiAmt * paidMonths;
+
+    // Start date = today minus paidMonths months
+    const startD = new Date();
+    startD.setMonth(startD.getMonth() - paidMonths);
+    const startDate = startD.toISOString().split('T')[0];
+
+    // last_deducted = 1st of this month (so we don't double-deduct on first open)
+    const now = new Date();
+    const lastDeducted = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+
+    const record = {
+        loan_name:        name,
+        loan_icon:        selectedEMIIcon,
+        total_amount:     totalAmt,
+        emi_amount:       emiAmt,
+        total_tenure:     tenure,
+        remaining_tenure: remaining,
+        total_paid:       totalPaid,
+        start_date:       startDate,
+        last_deducted:    lastDeducted,
+        is_active:        remaining > 0,
+    };
+
+    const saveBtn = document.querySelector('#emi-modal .modal-save');
+    saveBtn.textContent = 'Saving…';
+    saveBtn.disabled = true;
+
+    const { error } = await db.from('emi_tracker').insert([record]);
+
+    saveBtn.textContent = 'Save';
+    saveBtn.disabled = false;
+
+    if (error) { console.error(error); toast('❌ Failed to save EMI'); return; }
+
+    closeAddEMI();
+    toast('✅ Loan added!');
+    loadEMIList();
+}
+
+async function deleteEMI(id) {
+    if (!confirm('Remove this loan from tracker?')) return;
+
+    const { error } = await db.from('emi_tracker').delete().eq('id', id);
+    if (error) { toast('❌ Delete failed'); return; }
+
+    document.getElementById(`emi-card-${id}`)?.remove();
+    const list = document.getElementById('emi-list');
+    if (list && !list.querySelector('.emi-card')) {
+        list.innerHTML = '<p class="empty-state" style="padding:24px 0">No EMIs added yet. Tap ➕ to add one.</p>';
+    }
+    toast('🗑️ Removed');
+}
+
+// ─── EMI Auto-Deduction (on app open) ─────────────────────────────────────────
+// On every app open, check if 1st of the current month has passed since
+// last_deducted. If so, reduce remaining_tenure and increase total_paid.
+
+async function runEMIAutoDeduct() {
+    const now       = new Date();
+    const thisFirst = new Date(now.getFullYear(), now.getMonth(), 1);
+    const thisFirstStr = thisFirst.toISOString().split('T')[0];
+
+    const { data: loans, error } = await db
+        .from('emi_tracker')
+        .select('*')
+        .eq('is_active', true);
+
+    if (error || !loans || loans.length === 0) return;
+
+    for (const loan of loans) {
+        // Calculate how many 1st-of-months have passed since last_deducted
+        const lastDeductedDate = loan.last_deducted
+            ? new Date(loan.last_deducted + 'T00:00:00')
+            : new Date(loan.start_date   + 'T00:00:00');
+
+        // Count missed months: months where the 1st has already passed
+        let missed = 0;
+        const cursor = new Date(lastDeductedDate);
+        cursor.setMonth(cursor.getMonth() + 1); // move to next 1st
+        cursor.setDate(1);
+
+        while (cursor <= thisFirst) {
+            missed++;
+            cursor.setMonth(cursor.getMonth() + 1);
+        }
+
+        if (missed === 0) continue;
+
+        // Cap so we don't go below 0 tenure
+        const actualMissed       = Math.min(missed, loan.remaining_tenure);
+        const newRemaining       = loan.remaining_tenure - actualMissed;
+        const newPaid            = parseFloat(loan.total_paid) + parseFloat(loan.emi_amount) * actualMissed;
+        const nowActive          = newRemaining > 0;
+
+        await db.from('emi_tracker').update({
+            remaining_tenure: newRemaining,
+            total_paid:       newPaid,
+            last_deducted:    thisFirstStr,
+            is_active:        nowActive,
+        }).eq('id', loan.id);
+    }
 }
