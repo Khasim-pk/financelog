@@ -242,21 +242,18 @@
 <!-- ══════════════════════════════════════════
      ADD EMI MODAL
 ══════════════════════════════════════════ -->
-<div class="modal-backdrop" id="emi-modal" style="display:none">
-    <div class="modal" style="max-width:360px">
+<div class="modal-backdrop" id="emi-modal" style="display:none; overflow-y:auto; max-height:90vh;">
+    <div class="modal" style="max-width:360px; max-height:80vh; overflow-y:auto;">
         <h3>Add New EMI</h3>
         <label class="field-label" style="margin-top:0">Loan Name</label>
         <input type="text" id="emi-name" class="modal-input" placeholder="e.g. Home Loan" maxlength="30">
-        <label class="field-label">Icon</label>
-        <div class="icon-picker">
-            <button class="icon-opt selected" data-icon="🏠" onclick="pickEMIIcon(this)">🏠</button>
-            <button class="icon-opt" data-icon="🏦" onclick="pickEMIIcon(this)">🏦</button>
-            <button class="icon-opt" data-icon="💳" onclick="pickEMIIcon(this)">💳</button>
-            <button class="icon-opt" data-icon="🚗" onclick="pickEMIIcon(this)">🚗</button>
-            <button class="icon-opt" data-icon="📱" onclick="pickEMIIcon(this)">📱</button>
-            <button class="icon-opt" data-icon="💼" onclick="pickEMIIcon(this)">💼</button>
-            <button class="icon-opt" data-icon="🎓" onclick="pickEMIIcon(this)">🎓</button>
-        </div>
+        <label class="field-label">Loan Type</label>
+        <select id="emi-icon-select" class="modal-input">
+            <option value="🏠">Home Loan (🏠)</option>
+            <option value="🏦">Personal Loan (🏦)</option>
+            <option value="💰">Gold Loan (💰)</option>
+            <option value="🛡️">Insurance (🛡️)</option>
+        </select>
         <label class="field-label">Total Loan Amount</label>
         <div class="amount-wrap" style="margin-bottom:4px">
             <span class="rupee">₹</span>

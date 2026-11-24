@@ -719,6 +719,8 @@ function renderEMICard(loan) {
 
 // ─── Add EMI Modal ─────────────────────────────────────────────────────────────
 
+// ─── Add EMI Modal ─────────────────────────────────────────────────────────────
+
 function openAddEMI() {
     // Reset form
     document.getElementById('emi-name').value        = '';
@@ -726,24 +728,39 @@ function openAddEMI() {
     document.getElementById('emi-monthly').value     = '';
     document.getElementById('emi-tenure').value      = '';
     document.getElementById('emi-paid-months').value = '0';
+    // default icon via select dropdown
+    document.getElementById('emi-icon-select').value = '🏠';
     selectedEMIIcon = '🏠';
-    document.querySelectorAll('.icon-opt').forEach(b => {
-        b.classList.toggle('selected', b.dataset.icon === '🏠');
-    });
     document.getElementById('emi-modal').style.display = 'flex';
 }
 
 function closeAddEMI() {
     document.getElementById('emi-modal').style.display = 'none';
+    closeKeyboard(); // dismiss on close
+}
+
+function closeKeyboard() {
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+    }
 }
 
 function pickEMIIcon(btn) {
+    // Keep backward compatibility; update select as well
     selectedEMIIcon = btn.dataset.icon;
+    document.getElementById('emi-icon-select').value = selectedEMIIcon;
     document.querySelectorAll('.icon-opt').forEach(b => b.classList.remove('selected'));
     btn.classList.add('selected');
 }
 
 async function saveEMI() {
+    const name       = document.getElementById('emi-name').value.trim();
+    const totalAmt   = parseFloat(document.getElementById('emi-total').value);
+    const emiAmt     = parseFloat(document.getElementById('emi-monthly').value);
+    const tenure     = parseInt(document.getElementById('emi-tenure').value,  10);
+    const paidMonths = parseInt(document.getElementById('emi-paid-months').value, 10) || 0;
+    const icon       = document.getElementById('emi-icon-select').value;
+
     const name       = document.getElementById('emi-name').value.trim();
     const totalAmt   = parseFloat(document.getElementById('emi-total').value);
     const emiAmt     = parseFloat(document.getElementById('emi-monthly').value);
