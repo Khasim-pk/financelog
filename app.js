@@ -754,17 +754,12 @@ function pickEMIIcon(btn) {
 }
 
 async function saveEMI() {
-    const name       = document.getElementById('emi-name').value.trim();
-    const totalAmt   = parseFloat(document.getElementById('emi-total').value);
-    const emiAmt     = parseFloat(document.getElementById('emi-monthly').value);
-    const tenure     = parseInt(document.getElementById('emi-tenure').value,  10);
-    const paidMonths = parseInt(document.getElementById('emi-paid-months').value, 10) || 0;
-    const icon       = document.getElementById('emi-icon-select').value;
 
+    const icon       = document.getElementById('emi-icon-select').value;
     const name       = document.getElementById('emi-name').value.trim();
     const totalAmt   = parseFloat(document.getElementById('emi-total').value);
     const emiAmt     = parseFloat(document.getElementById('emi-monthly').value);
-    const tenure     = parseInt(document.getElementById('emi-tenure').value,  10);
+    const tenure     = parseInt(document.getElementById('emi-tenure').value, 10);
     const paidMonths = parseInt(document.getElementById('emi-paid-months').value, 10) || 0;
 
     if (!name)                        { toast('⚠️ Enter a loan name');           return; }
